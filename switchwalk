@@ -1,0 +1,196 @@
+#!/usr/bin/env python
+import argparse
+import netsnmp
+import sys
+
+class fcolor:
+	GRAY = "\033[90m"  # US
+	GREY = "\033[90m"  # UK
+	RED = "\033[91m"
+	GREEN = "\033[92m"
+	YELLOW = "\033[93m"
+	BLUE = "\033[94m"
+	MAGENTA = "\033[95m"
+	CYAN = "\033[96m"
+	WHITE = "\033[97m"
+	YELLOW = "\033[93m"
+	ENDC = "\033[0m"
+	NONE = ""
+
+class bcolor:
+	GRAY = "\033[100m"  # US
+	GREY = "\033[100m"  # UK
+	RED = "\033[101m"
+	GREEN = "\033[102m"
+	YELLOW = "\033[103m"
+	BLUE = "\033[104m"
+	MAGENTA = "\033[105m"
+	CYAN = "\033[106m"
+	WHITE = "\033[107m"
+	YELLOW = "\033[103m"
+	ENDC = "\033[0m"
+	NONE = ""
+
+class Device(object):
+
+	def __init__(self, Name, Location, Description, ID = -1337, IpAddress = "", InterfaceList = [], Comment = ""):
+		super(Device, self).__init__()
+		self.ID = ID
+		self.Name = Name
+		self.Location = Location
+		self.Description = Description
+		self.IpAddress = IpAddress
+		self.InterfaceList = InterfaceList
+		self.Comment = Comment
+
+class NetworkInterface(object):
+
+	def __init__(self, ID,Name,MacAddress,DeviceID= -1337,Type=0,Speed=0,MacAddressTable=[]):
+		super(NetworkInterface, self).__init__()
+		self.ID = ID
+		self.DeviceID = DeviceID
+		self.Name = Name
+		self.MacAddress = MacAddress
+		self.Type = Type
+		self.Speed = Speed
+		self.MacAddressTable = MacAddressTable
+
+class MacAddressTableEntry(object):
+
+	def __init__(self, InterfaceID,MacAddress,DeviceID):
+		super(MacAddressTableEntry, self).__init__()
+		self.DeviceID = DeviceID
+		self.InterfaceID = InterfaceID
+		self.MacAddress = MacAddress
+
+def ByteToHex(ByteStr):
+	"""
+	Convert the given "Byte String" into a "Hex String"
+	"""
+	return ''.join(["%02X " % ord(x) for x in ByteStr]).strip()
+
+# Convert the given "Hex String" into a Decimal MIB Version
+def IdxToMib(HexStr):
+	"""
+	Convert a Hexadecimal MacAddress to it's Decimal Counterpart.
+	i.e Hex-STRING: 00 01 2E 4D 7C 47 = Dec-STRING: 0.1.46.77.124.71
+	"""
+	HexStr = ByteToHex(HexStr)
+	Result = ""
+	for octet in HexStr.split(" "):
+		Result = Result + (str((int(octet,16))) + ".")
+	return Result[:-1]
+
+def GetMib(mib):
+	return netsnmp.snmpget( netsnmp.Varbind(mib),**SnmpConfig)
+
+def GetInterfaceList(Device):
+	InterfaceList = []
+	for idx in netsnmp.snmpwalk(netsnmp.Varbind("iso.3.6.1.2.1.2.2.1.1."),**SnmpConfig):
+		try:
+			# Get Interface Mac Address ane Name
+			InterfaceMac, InterfaceName = netsnmp.snmpget(netsnmp.Varbind("iso.3.6.1.2.1.2.2.1.6.",idx),netsnmp.Varbind("iso.3.6.1.2.1.2.2.1.2.",idx),**SnmpConfig)
+
+			# To Get the Identification right certain switches act different!
+			if "3Com Baseline Switch 2916-SFP Plus" in Device.Description:
+				InterfaceID = idx
+			elif "3Com Baseline Switch 2924-SFP Plus" in Device.Description:
+				InterfaceID = idx
+			elif "3Com " in Device.Description:
+				InterfaceID = InterfaceName.split("/")[2]
+			else:
+				InterfaceID = idx
+			# Only append the Interface to the List, if the Interface has a MAC Address
+			if InterfaceMac != None:
+				InterfaceList.append(NetworkInterface(ID=InterfaceID,DeviceID=Device.ID,Name=InterfaceName,MacAddress=InterfaceMac))
+		except Exception as e:
+			Color = fcolor.NONE
+			if args.c:
+				Color = fcolor.YELLOW
+			print(Color + "DEBUG: Error while processing Interface: " +  str(e) + fcolor.ENDC)
+	return InterfaceList
+
+def GetMacAddressTables(Device):
+	MacAddressTableList = []
+	for idx in netsnmp.snmpwalk(netsnmp.Varbind("iso.3.6.1.2.1.17.4.3.1.1."),**SnmpConfig):
+		InterfaceID = netsnmp.snmpget(
+				netsnmp.Varbind("iso.3.6.1.2.1.17.4.3.1.2.",IdxToMib(idx)),
+				**SnmpConfig)
+		MacAddressTableList.append(MacAddressTableEntry(InterfaceID=InterfaceID[0],DeviceID=Device.ID,MacAddress=idx))
+	return MacAddressTableList
+
+def AssociateInterfacesAndAddressTables(InterfaceList,MacAddressTableList):
+	Result = []
+	for Interface in InterfaceList:
+		TempList = []
+		for MacAddress in MacAddressTableList:
+			if MacAddress.InterfaceID == Interface.ID:
+				TempList.append(MacAddress)
+		Result.append(NetworkInterface(ID=Interface.ID,Name=Interface.Name,MacAddress=Interface.MacAddress,MacAddressTable=TempList))
+	return Result
+
+
+try:
+	Color = fcolor.NONE
+# Argument Parser
+	parser = argparse.ArgumentParser(description="Ham5ter's SwitchWalk Utility")
+	parser.add_argument("Address",default=None,help="The first Argument needs to be The Hostaddress you want to Walk.")
+	parser.add_argument("-i",default=None,help="list all Macaddress for the Given Interface ID (use \"ALL\" to list all Mac Address)")
+	parser.add_argument("-g",default=-1,type=int,help="only list Interfaces that have more then <G> Addresses")
+	parser.add_argument("-c",action="store_true",help="Add this Argument to make the Output Colorfull")
+	parser.add_argument("--snmp-community",default="public",help="Set the SNMP Community String")
+	parser.add_argument("--snmp-version",default=1,help="Set the SNMP Version")
+	args = parser.parse_args()
+
+# SNMP Configuration for the SNMP Requests, made by this Tool
+	SnmpConfig = {
+		"Version": args.snmp_version,
+		"DestHost": args.Address,
+		"Community": args.snmp_community
+	}
+# SNMP ende
+
+	SnmpDevice = Device(Name=GetMib("iso.3.6.1.2.1.1.5.0")[0],
+					Location=GetMib("iso.3.6.1.2.1.1.6.0")[0],
+					Description=GetMib("iso.3.6.1.2.1.1.1.0")[0],
+					IpAddress=SnmpConfig['DestHost'])
+	Color = fcolor.NONE
+	if args.c:
+		Color = fcolor.GREEN
+	print("IP:\t\t" + Color + SnmpDevice.IpAddress + fcolor.ENDC)
+	print("Name:\t\t" + Color + SnmpDevice.Name + fcolor.ENDC)
+	print("Location:\t" + Color + str(SnmpDevice.Location) + fcolor.ENDC)
+	print("Description:\t" + Color + SnmpDevice.Description + fcolor.ENDC)
+
+# Do the Magic
+
+	MacList = GetMacAddressTables(Device=SnmpDevice)
+	InterfaceList = GetInterfaceList(Device=SnmpDevice)
+	AssociatedList = AssociateInterfacesAndAddressTables(InterfaceList=InterfaceList,MacAddressTableList=MacList)
+
+# Output the Magic
+
+	if args.i != None:
+		if args.i.lower() == "all":
+			for Interface in AssociatedList:
+				for Address in Interface.MacAddressTable:
+					print("Interface:\t" + Address.InterfaceID + ",\t" + Interface.Name + ",\t" + ByteToHex(Address.MacAddress).replace(" ",":"))
+		else:
+			for Interface in AssociatedList:
+				if Interface.ID == args.i:
+					for Address in Interface.MacAddressTable:
+						print("Interface:\t" +  Interface.ID + ",\t" + Interface.Name + ",\t"  + ByteToHex(Address.MacAddress).replace(" ",":"))
+					break
+	else:
+		for Interface in AssociatedList:
+			Color = fcolor.NONE
+			if args.c:
+				if len(Interface.MacAddressTable) >1:
+					Color = fcolor.BLUE
+				elif len(Interface.MacAddressTable) == 0:
+					Color = fcolor.GRAY
+			if len(Interface.MacAddressTable) > int(args.g):
+				print(Color + "Address:\t" + Interface.ID + ",\t" + Interface.Name + ",\t" + ByteToHex(Interface.MacAddress).replace(" ",":") + ",\t" + str(len(Interface.MacAddressTable)) + fcolor.ENDC)
+except Exception as e:
+	print(str(e))
+	sys.exit(2)
