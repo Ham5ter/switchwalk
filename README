@@ -1,0 +1,26 @@
+# Switchwalk
+
+## ./switchwalk --help
+
+
+	usage: switchwalk [-h] [-i I] [-g G] [-c] [--snmp-community SNMP_COMMUNITY]
+	                  [--snmp-version SNMP_VERSION]
+	                  Address
+	
+	Ham5ter's SwitchWalk Utility
+	
+	positional arguments:
+	  Address               The first Argument needs to be The Hostaddress you
+	                        want to Walk.
+	
+	optional arguments:
+	  -h, --help            show this help message and exit
+	  -i I                  list all Macaddress for the Given Interface ID (use
+	                        "ALL" to list all Mac Address)
+	  -g G                  only list Interfaces that have more then <G> Addresses
+	  -c                    Add this Argument to make the Output Colorfull
+	  --snmp-community SNMP_COMMUNITY
+	                        Set the SNMP Community String
+	  --snmp-version SNMP_VERSION
+	                        Set the SNMP Version
+
